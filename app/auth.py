@@ -1,11 +1,10 @@
 import datetime as dt
 import os
 
-from http import HTTPStatus
-import jwt
+from jose import jwt, JWTError
 
 from typing import Annotated
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from passlib.context import CryptContext
 
@@ -29,6 +28,9 @@ async def authenticate_user(username: str, password: str, db: database.users):
         "username": username,
         "password": password
     })
+    print(user)
+    if not user:
+        raise ValueError('User do not exist. Wrong password or username.')
     return user
 
 
@@ -38,31 +40,43 @@ def create_jwt_token(
 ):
     to_encode = data.copy()
     if expires_delta:
-        expire = dt.datetime.now(dt.timezone.utc) + expires_delta
-    expire = dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=30)
+        expire = dt.datetime.now() + expires_delta
+    expire = dt.datetime.now() + dt.timedelta(minutes=30)
     to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+    encoded_jwt = jwt.encode(
+        data, SECRET_KEY, algorithm=ALGORITHM
+    )
+
+    return encoded_jwt
+
+
+def get_user(
+    db: database.users,
+    username: str
+):
+    user = db.find_one({"username": username})
+
+    return user
 
 
 async def get_current_user(
-    token: str = Annotated[str, Depends(oauth2_bearer)]
+    token: Annotated[str, Depends(oauth2_bearer)]
 ):
     credentials_exception = HTTPException(
-        status_code=HTTPStatus.HTTP_401_UNAUTHORIZED,
+        status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
-        headers={"WWW-Authenticate": "Bearer"},
+        headers={"WWW-Authorization": "Bearer"},
     )
-
     try:
         payload: dict = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         username: str = payload.get("sub")
-        if not username:
+        if username is None:
             raise credentials_exception
         token_data = TokenData(username=username)
-    except jwt.JWTError:
+    except JWTError:
         raise credentials_exception
 
-    user = database.users.find_one({"username": token_data.username})
+    user = get_user(db=database.users, username=token_data.username)
     return user
 
 
@@ -75,7 +89,7 @@ async def login_for_token(
     )
     if not user:
         raise HTTPException(
-            status_code=HTTPStatus.HTTP_401_UNAUTHORIZED,
+            status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Incorrect username or password",
             headers={"WWW-Authenticate": "Bearer"},
         )

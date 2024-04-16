@@ -4,7 +4,7 @@ from fastapi.encoders import jsonable_encoder
 from typing import Annotated, List, Optional
 
 
-from models import User, Sent_message
+from models import User, UserUpdate, Send_message, Message
 import auth
 import database
 
@@ -14,12 +14,12 @@ router = APIRouter()
 app = FastAPI()
 app.include_router(auth.router)
 
-user_depends = Annotated[User, Depends(auth.get_current_user)]
-db_depends = Annotated[str, Depends(auth.oauth2_bearer)]
-
 
 @router.get('/')
-async def get_users(token: db_depends, search: Optional[str] = None):
+async def get_users(
+    token: Annotated[str, Depends(auth.oauth2_bearer)],
+    search: Optional[str] = None
+):
     users = database.users.find({})
 
     if search:
@@ -43,30 +43,46 @@ async def create_user(user: User = Body()):
     return created_user
 
 
-@router.get('/{user_username}/')
+@router.get('/{user_username}/', response_model=Message)
 def get_messages(
+    token: Annotated[str, Depends(auth.oauth2_bearer)],
+    current_user: Annotated[User, Depends(auth.get_current_user)],
     user_username: str,
-    current_user: user_depends
 ):
     user = database.users.find_one(
-        {"_username": user_username}
+        {"username": user_username}
     )
     messages = database.messages.find(
         {
-            "_sent_to": user,
-            "_sent_from": current_user,
+            "sent_to": user_username,
+            "sent_from": current_user,
         }
     )
-    return List[messages]
+    messages = list(messages)
+
+    for message in messages:
+        message["_id"] = str(message["_id"])
+
+    return messages
 
 
-@router.post('/{user_username}/', response_model=Sent_message)
+@router.post('/{user_username}/', response_model=Message)
 async def message_user(
-    user_username: str, token: db_depends,
-    current_user: user_depends, message: str
+    token: Annotated[str, Depends(auth.oauth2_bearer)],
+    current_user: Annotated[User, Depends(auth.get_current_user)],
+    user_username: str,
+    message: str
 ):
-    message = jsonable_encoder(message)
-    new_message = database.messages.insert_one(message)
+    user = database.users.find_one({"username": user_username})
+    if user is None:
+        raise ValueError("User do not exist! You can't sent message")
+
+    data: dict = {
+        "sent_from": current_user['username'],
+        "sent_to": user_username,
+        "message": message
+    }
+    new_message = database.messages.insert_one(data)
     sent_message = database.messages.find_one(
         {"_id": new_message.inserted_id}
     )
@@ -75,8 +91,29 @@ async def message_user(
 
 
 @router.get('/me/', response_model=User)
-def get_user_me(token: db_depends, current_user: user_depends):
+def get_user_me(
+    current_user: Annotated[User, Depends(auth.get_current_user)]
+):
     return current_user
+
+
+@router.put('/me', response_model=User)
+def update_user(
+    data: UserUpdate,
+    current_user: Annotated[User, Depends(auth.get_current_user)]
+):
+    changes = {k: v for k, v in data.model_dump().items() if v is not None}
+    database.users.update_one(
+        {"username": current_user.username}, {"$set": changes}
+    )
+
+    updated_user = database.users.find_one({"username": current_user.username})
+    if changes.modified_count == 1:
+        return updated_user
+
+    return {
+        "message": f"Error occured while updating profile {data.name}"
+    }
 
 
 app.include_router(router, tags=['Users'], prefix='/api/users')
