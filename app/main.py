@@ -1,82 +1,40 @@
-import datetime as dt
-import jwt
-import os
-
-from http import HTTPStatus
-from pymongo import MongoClient
-
-from fastapi import (
-    FastAPI, APIRouter, Body, Depends, Request, HTTPException
-    )
+from fastapi import FastAPI, APIRouter, Body, Depends
 from fastapi.encoders import jsonable_encoder
-from fastapi.security import OAuth2PasswordBearer
-from passlib.context import CryptContext
 
-
-from typing_extensions import Annotated
 from typing import Annotated, List, Optional
 
 
-from models import User, ListUser, Sent_message
+from models import User, Sent_message
+import auth
 import database
 
 
 router = APIRouter()
 
 app = FastAPI()
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/token")
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+app.include_router(auth.router)
 
-"""
-@app.on_event("startup")
-def startup_db_client():
-    app.mongodb_client = MongoClient(config["MONGODB_CONNECTION_URI"])
-    app.database = app.mongodb_client[config["DB_NAME"]]
-    print("Connected to the MongoDB database!")
-
-@app.on_event("shutdown")
-def shutdown_db_client():
-    app.mongodb_client.close()"""
+user_depends = Annotated[User, Depends(auth.get_current_user)]
+db_depends = Annotated[str, Depends(auth.oauth2_bearer)]
 
 
-SECRET_KEY = os.getenv('SECRET_KEY')
-ALGORITHM = os.getenv('ALGORITHM')
-EXPIRATION_TIME = dt.timedelta(minutes=40)
+@router.get('/')
+async def get_users(token: db_depends, search: Optional[str] = None):
+    users = database.users.find({})
 
+    if search:
+        users = database.users.find({
+            "username": {'$regex': f'^{search}'}
+        })
+    users = list(users)
+    for user in users:
+        user["_id"] = str(user["_id"])
 
-def create_jwt_token(data: dict):
-    expiration = dt.datetime.now() + EXPIRATION_TIME
-    data.update({"exp": expiration})
-    token = jwt.encode(data, SECRET_KEY, algorithm=ALGORITHM)
-    return token
-
-
-def verify_jwt_token(token: str):
-    try:
-        decoded_data = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        return decoded_data
-    except jwt.PyJWTError:
-        return None
-
-
-def get_current_user(token: str = Depends(oauth2_scheme)):
-    decoded_data = verify_jwt_token(token)
-    if not decoded_data:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, detail='Invalid token.')
-    user = get_user(decoded_data["sub"])
-    if not user:
-        raise HTTPException(HTTPStatus.BAD_REQUEST, detail='User not found.')
-    return user
-
-
-@router.get('/', response_model=List[ListUser])
-async def get_users(token: Annotated[str, Depends(oauth2_scheme)]):
-    users = List[User]
     return users
 
 
 @router.post('/')
-async def create_user(request: Request, user: User = Body()):
+async def create_user(user: User = Body()):
     user = jsonable_encoder(user)
     new_user = database.users.insert_one(user)
     created_user = database.users.find_one(
@@ -86,9 +44,9 @@ async def create_user(request: Request, user: User = Body()):
 
 
 @router.get('/{user_username}/')
-def get_user(
-    request: Request, user_username: str,
-    current_user: Annotated[User, Depends(get_current_user)]
+def get_messages(
+    user_username: str,
+    current_user: user_depends
 ):
     user = database.users.find_one(
         {"_username": user_username}
@@ -104,10 +62,8 @@ def get_user(
 
 @router.post('/{user_username}/', response_model=Sent_message)
 async def message_user(
-    user_username: str,
-    token: Annotated[str, Depends(oauth2_scheme)],
-    current_user: User = Depends(get_current_user),
-    message: Sent_message = Body()
+    user_username: str, token: db_depends,
+    current_user: user_depends, message: str
 ):
     message = jsonable_encoder(message)
     new_message = database.messages.insert_one(message)
@@ -117,8 +73,9 @@ async def message_user(
 
     return sent_message
 
-@router.get('/me/')
-def get_user_me(current_user: User = Depends(get_current_user)):
+
+@router.get('/me/', response_model=User)
+def get_user_me(token: db_depends, current_user: user_depends):
     return current_user
 
 

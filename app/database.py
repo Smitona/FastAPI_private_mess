@@ -1,4 +1,4 @@
-from pymongo import mongo_client, ASCENDING
+from pymongo import mongo_client
 
 
 client = mongo_client.MongoClient('localhost', 27017)
@@ -11,5 +11,5 @@ except Exception:
 
 db = client.test_db
 
-users = db.users
-messages = db.messages
+users = db['users']
+messages = db['messages']
