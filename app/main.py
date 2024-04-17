@@ -1,10 +1,11 @@
+import datetime as dt
 from fastapi import FastAPI, APIRouter, Body, Depends
 from fastapi.encoders import jsonable_encoder
 
-from typing import Annotated, List, Optional
+from typing import Annotated, Optional
 
 
-from models import User, UserUpdate, Send_message, Message
+from models import User, UserUpdate, Message
 import auth
 import database
 
@@ -18,7 +19,7 @@ app.include_router(auth.router)
 @router.get('/')
 async def get_users(
     token: Annotated[str, Depends(auth.oauth2_bearer)],
-    search: Optional[str] = None
+    search: Optional[str] = None,
 ):
     users = database.users.find({})
 
@@ -43,22 +44,38 @@ async def create_user(user: User = Body()):
     return created_user
 
 
-@router.get('/{user_username}/', response_model=Message)
+@router.get('/{user_username}/')
 def get_messages(
     token: Annotated[str, Depends(auth.oauth2_bearer)],
     current_user: Annotated[User, Depends(auth.get_current_user)],
     user_username: str,
 ):
-    user = database.users.find_one(
+    """ user = database.users.find_one(
         {"username": user_username}
     )
-    messages = database.messages.find(
+    if user is None:
+        raise ValueError("User do not exist!")"""
+    messages_to = list(database.messages.find(
         {
             "sent_to": user_username,
             "sent_from": current_user,
         }
-    )
-    messages = list(messages)
+    ))
+
+    messages_from = list(database.messages.find(
+        {
+            "sent_to": current_user,
+            "sent_from": user_username,
+        }
+    ))
+
+    messages = messages_to + messages_from
+    messages = sorted(
+        messages,
+        key=lambda x: dt.datetime.strptime(
+                x['sent_at'], '%Y-%m-%d %H:%M:%S'
+            ), reverse=True
+        )
 
     for message in messages:
         message["_id"] = str(message["_id"])
@@ -86,33 +103,48 @@ async def message_user(
     sent_message = database.messages.find_one(
         {"_id": new_message.inserted_id}
     )
-
     return sent_message
 
 
-@router.get('/me/', response_model=User)
-def get_user_me(
+@router.get('/me/')
+def profile(
+    token: Annotated[str, Depends(auth.oauth2_bearer)],
     current_user: Annotated[User, Depends(auth.get_current_user)]
 ):
-    return current_user
+    user = database.users.find_one(
+        {"username": current_user['username']}
+    )
+    return user
 
 
-@router.put('/me', response_model=User)
-def update_user(
-    data: UserUpdate,
-    current_user: Annotated[User, Depends(auth.get_current_user)]
+@router.patch('/me', response_model=User)
+def update_profile(
+    token: Annotated[str, Depends(auth.oauth2_bearer)],
+    current_user: Annotated[User, Depends(auth.get_current_user)],
+    data: UserUpdate = Body(),
 ):
-    changes = {k: v for k, v in data.model_dump().items() if v is not None}
-    database.users.update_one(
-        {"username": current_user.username}, {"$set": changes}
+    stored_user_data = database.users.find_one(
+        {"username": current_user['username']}
     )
 
-    updated_user = database.users.find_one({"username": current_user.username})
-    if changes.modified_count == 1:
-        return updated_user
+    stored_user_model = UserUpdate(**stored_user_data)
+    update_data = data.model_dump(exclude_unset=True)
+
+    updated_user = stored_user_model.model_copy(update=update_data)
+    updated_user = jsonable_encoder(updated_user)
+
+    updated_data = database.users.update_one(
+        {"username": current_user['username']}, {"$set": updated_user}
+    )
+
+    if updated_data:
+        updated_data = database.users.find_one(
+            {"username": current_user['username']}
+        )
+        return updated_data
 
     return {
-        "message": f"Error occured while updating profile {data.name}"
+        "message": f"Error occured while updating profile {data.username}"
     }
 
 

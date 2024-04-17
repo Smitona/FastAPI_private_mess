@@ -4,17 +4,8 @@ from bson.objectid import ObjectId
 
 from fastapi import Query
 
-from pydantic import (
-    BaseModel, EmailStr, field_validator, Field
-)
+from pydantic import BaseModel, EmailStr, Field
 from typing import Annotated, Optional
-
-import database
-
-
-class ObjectIdStr(str):
-    class Config:
-        json_encoders = {ObjectId: lambda oid: str(oid)}
 
 
 class User(BaseModel):
@@ -24,20 +15,10 @@ class User(BaseModel):
     last_name: str = Field(examples=['Ivanov'])
     email: EmailStr | None = Field(default=None)
     password: str = Field(examples=['password'])
-    number: Optional[str] | None = Field(examples=['+79236742401'])
-    image: Optional[str] | None = Field(default=None)
-
-    @field_validator('username')
-    def unique_username(username):
-        if database.users.find_one({"username": username}):
-            raise ValueError('User with this username already registered!')
-        return username
-
-    @field_validator('email')
-    def unique_email(email):
-        if database.users.find_one({"email": email}):
-            raise ValueError('User with this email already registered!')
-        return email
+    number: Optional[str] | None = Field(
+        max_length=12, min_length=12, examples=['+79236742401']
+    )
+    profile_pic: Optional[str] | None = Field(default='https://clck.ru/3A8oWW')
 
     class Config:
         populate_by_name = True
@@ -50,8 +31,10 @@ class UserUpdate(BaseModel):
     last_name: str = Field(examples=['Ivanov'])
     email: EmailStr | None = Field(default=None)
     password: str = Field(examples=['password'])
-    number: Optional[str] | None = Field(examples=['+79236742401'])
-    image: Optional[str] | None = Field(default=None)
+    number: Optional[str] | None = Field(
+        default='Unknown', examples=['+79236742401']
+    )
+    image: Optional[str] | None = Field(default='No image')
 
 
 class Token(BaseModel):
@@ -61,20 +44,6 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: str | None = None
-
-
-class Send_message(BaseModel):
-    id: str = Field(default_factory=uuid.uuid4, alias='_id')
-    sent_to: str = Field(examples=['dimaivanov'])
-    message: Annotated[str, Query(max_length=225)] = Field(
-        examples=['Hello']
-    )
-    sent_at: dt.datetime = dt.datetime.now()
-
-    class Config:
-        populate_by_name = True
-        arbitrary_types_allowed = True
-        json_encoders = {ObjectId: lambda oid: str(oid)}
 
 
 class Message(BaseModel):

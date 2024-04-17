@@ -50,10 +50,7 @@ def create_jwt_token(
     return encoded_jwt
 
 
-def get_user(
-    db: database.users,
-    username: str
-):
+def get_user(db: database.users, username: str):
     user = db.find_one({"username": username})
 
     return user
@@ -77,6 +74,7 @@ async def get_current_user(
         raise credentials_exception
 
     user = get_user(db=database.users, username=token_data.username)
+
     return user
 
 
